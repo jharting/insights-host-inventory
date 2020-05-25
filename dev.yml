@@ -14,6 +14,7 @@ services:
       environment:
         - ZOOKEEPER_CLIENT_PORT=32181
         - ZOOKEEPER_SERVER_ID=1
+
     kafka:
       image: confluentinc/cp-kafka
       ports:
@@ -28,3 +29,30 @@ services:
         - KAFKA_BROKER_ID=1
         - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
         - KAFKA_ZOOKEEPER_CONNECT=zookeeper:32181
+
+    connect:
+      build:
+        context: connect
+        dockerfile: Dockerfile
+      links:
+        - kafka
+        - zookeeper
+      ports:
+        - 8083:8083
+      environment:
+        CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+        CONNECT_GROUP_ID: 1
+        CONNECT_CONFIG_STORAGE_TOPIC: connect_config
+        CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+        CONNECT_OFFSET_STORAGE_TOPIC: connect_offsets
+        CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+        CONNECT_STATUS_STORAGE_TOPIC: connect_status
+        CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+        CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+        CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+        #CONNECT_CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+        #CONNECT_CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+        #CONNECT_INTERNAL_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+        #CONNECT_INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+        CONNECT_LOG4J_ROOT_LOGLEVEL: ERROR
+        CONNECT_REST_ADVERTISED_HOST_NAME: 0.0.0.0

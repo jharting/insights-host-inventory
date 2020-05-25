@@ -1,0 +1,23 @@
+{
+    "name": "pg.sink",
+    "config": {
+      "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+      "tasks.max": "1",
+      "topics": "platform.inventory.host-egress",
+      "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+      "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+      "value.converter.schemas.enable": false,
+      "connection.url": "jdbc:postgresql://db:5432/insights",
+      "connection.user": "insights",
+      "connection.password": "insights",
+      "dialect.name": "PostgreSqlDatabaseDialect",
+      "insert.mode": "upsert",
+      "batch.size": 3000,
+      "delete.enabled": false,
+      "table.name.format": "platform_inventory_hosts",
+      "pk.mode": "record_key",
+      "pk.fields": "id",
+      "fields.whitelist": "display_name",
+      "auto.create": true
+   }
+}
