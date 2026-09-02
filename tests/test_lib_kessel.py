@@ -68,6 +68,84 @@ def mock_subject_ref() -> subject_reference_pb2.SubjectReference:
     return subject_reference_pb2.SubjectReference(resource=resource_ref)
 
 
+class TestKesselClientInit:
+    """Tests for Kessel.__init__'s channel/auth credential selection.
+
+    JIRA: RHCLOUD-48029
+    """
+
+    def _make_config(self, mocker, *, auth_enabled=False, insecure=True, ca_certificate=None):
+        config = mocker.Mock()
+        config.kessel_inventory_api_endpoint = "kessel-inventory.example.com:9000"
+        config.kessel_auth_enabled = auth_enabled
+        config.kessel_insecure = insecure
+        config.kessel_ca_certificate = ca_certificate
+        config.kessel_timeout = 10.0
+        return config
+
+    def test_insecure_channel_when_no_auth_and_insecure(self, mocker) -> None:
+        """Legacy/dev V1 default: no auth, insecure channel."""
+        mock_builder = mocker.patch("lib.kessel.ClientBuilder").return_value
+        mock_builder.insecure.return_value = mock_builder
+        mock_builder.build.return_value = (Mock(), Mock())
+
+        config = self._make_config(mocker, auth_enabled=False, insecure=True)
+        Kessel(config)
+
+        mock_builder.insecure.assert_called_once()
+        mock_builder.oauth2_client_authenticated.assert_not_called()
+        mock_builder.authenticated.assert_not_called()
+
+    def test_oauth2_authenticated_with_ca_certificate(self, mocker, tmp_path) -> None:
+        """V2 dependency endpoint target state: OAuth2 auth over TLS with a custom CA."""
+        ca_file = tmp_path / "ca.pem"
+        ca_file.write_bytes(b"fake-ca-bytes")
+
+        mock_builder = mocker.patch("lib.kessel.ClientBuilder").return_value
+        mock_builder.oauth2_client_authenticated.return_value = mock_builder
+        mock_builder.build.return_value = (Mock(), Mock())
+        mocker.patch("lib.kessel.grpc.ssl_channel_credentials", return_value="mock-channel-creds")
+        mock_get_creds = mocker.patch("lib.kessel.get_kessel_oauth2_credentials", return_value="mock-auth-creds")
+
+        config = self._make_config(mocker, auth_enabled=True, insecure=False, ca_certificate=str(ca_file))
+        Kessel(config)
+
+        mock_get_creds.assert_called_once_with(config)
+        mock_builder.oauth2_client_authenticated.assert_called_once_with(
+            "mock-auth-creds", channel_credentials="mock-channel-creds"
+        )
+        mock_builder.insecure.assert_not_called()
+        mock_builder.authenticated.assert_not_called()
+
+    def test_oauth2_authenticated_without_ca_certificate_uses_system_trust(self, mocker) -> None:
+        """No CA certificate (V1 fallback path) -> channel_credentials stays None (system trust)."""
+        mock_builder = mocker.patch("lib.kessel.ClientBuilder").return_value
+        mock_builder.oauth2_client_authenticated.return_value = mock_builder
+        mock_builder.build.return_value = (Mock(), Mock())
+        mock_get_creds = mocker.patch("lib.kessel.get_kessel_oauth2_credentials", return_value="mock-auth-creds")
+
+        config = self._make_config(mocker, auth_enabled=True, insecure=False, ca_certificate=None)
+        Kessel(config)
+
+        mock_get_creds.assert_called_once_with(config)
+        mock_builder.oauth2_client_authenticated.assert_called_once_with(
+            "mock-auth-creds", channel_credentials=None
+        )
+
+    def test_secure_unauthenticated_uses_authenticated_builder(self, mocker) -> None:
+        """Neither insecure nor auth-enabled -> plain TLS via the `authenticated()` builder method."""
+        mock_builder = mocker.patch("lib.kessel.ClientBuilder").return_value
+        mock_builder.authenticated.return_value = mock_builder
+        mock_builder.build.return_value = (Mock(), Mock())
+
+        config = self._make_config(mocker, auth_enabled=False, insecure=False, ca_certificate=None)
+        Kessel(config)
+
+        mock_builder.authenticated.assert_called_once_with(channel_credentials=None)
+        mock_builder.insecure.assert_not_called()
+        mock_builder.oauth2_client_authenticated.assert_not_called()
+
+
 class TestCheckBulkResourcesFeatureFlag:
     """Tests for _check_bulk_resources with feature flag control."""
 
