@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 from app_common_python import DependencyEndpoints
 from app_common_python import get_v2_dependency_endpoint
@@ -58,13 +59,36 @@ class Config:
 
         cfg = app_common_python.LoadedConfig
 
-        # Only configure Kessel from DependencyEndpoints if the dependency exists
-        try:
-            kessel_inventory_hostname = DependencyEndpoints["kessel-inventory"]["api"].hostname
-            kessel_inventory_port = os.environ.get("KESSEL_INVENTORY_API_PORT", "9000")
-            self.kessel_inventory_api_endpoint = f"{kessel_inventory_hostname}:{kessel_inventory_port}"
-        except KeyError:
-            self.kessel_inventory_api_endpoint = os.environ.get("KESSEL_INVENTORY_API_ENDPOINT", "localhost:9000")
+        # Prefer the Clowder V2 dependency endpoint (carries uri/ca_certificate/authenticated) when
+        # kessel-inventory is served via a V2-aware ClowdApp/ClowdAppRef. Fall back to the V1
+        # DependencyEndpoints hostname lookup, then to a plain env var, for environments where
+        # kessel-inventory is still V1-only or not declared as a dependency at all.
+        #
+        # KESSEL_INVENTORY_API_PORT overrides the port even on the V2 path. This isn't just a V1
+        # leftover: Clowder V2 endpoints get populated for kessel-inventory's real in-cluster
+        # ClowdApp too, but it hides its actual gRPC port behind a non-standard h2cTargetPort=9000
+        # (rather than a standard public/private port), so the V2-reported port is wrong for that
+        # deployment. The override lets one codebase correctly serve both a ClowdAppRef consumer
+        # (where remoteEnvironment.tls.port is explicitly correct, e.g. 443 -- no override needed)
+        # and an in-cluster ClowdApp consumer (V2 port is wrong -- override supplies the real one)
+        # during the transition. See https://github.com/RedHatInsights/insights-host-inventory/pull/4878
+        # discussion for the full reasoning.
+        self._kessel_v2_endpoint = get_v2_dependency_endpoint("kessel-inventory", "api")
+        if self._kessel_v2_endpoint is not None:
+            v2_host = urlsplit(self._kessel_v2_endpoint.uri).hostname
+            v2_port = urlsplit(self._kessel_v2_endpoint.uri).port
+            kessel_inventory_port = os.environ.get("KESSEL_INVENTORY_API_PORT") or v2_port
+            self.kessel_inventory_api_endpoint = f"{v2_host}:{kessel_inventory_port}"
+        else:
+            try:
+                kessel_inventory_hostname = DependencyEndpoints["kessel-inventory"]["api"].hostname
+                # NOTE: os.environ.get(key, default) would NOT fall through here if the ClowdApp
+                # template sets KESSEL_INVENTORY_API_PORT="" (its new blank default) -- an empty
+                # string is a present value, not a missing key. `or` is required, not cosmetic.
+                kessel_inventory_port = os.environ.get("KESSEL_INVENTORY_API_PORT") or "9000"
+                self.kessel_inventory_api_endpoint = f"{kessel_inventory_hostname}:{kessel_inventory_port}"
+            except KeyError:
+                self.kessel_inventory_api_endpoint = os.environ.get("KESSEL_INVENTORY_API_ENDPOINT", "localhost:9000")
 
         self.is_clowder = True
         self.metrics_port = cfg.metricsPort
@@ -178,6 +202,7 @@ class Config:
         self.rbac_endpoint = os.environ.get("RBAC_ENDPOINT", "http://localhost:8111")
         self.rbac_endpoint_ca_certificate = None
         self.rbac_endpoint_authenticated = False
+        self._kessel_v2_endpoint = None
         self.kessel_inventory_api_endpoint = os.environ.get("KESSEL_INVENTORY_API_ENDPOINT", "localhost:9000")
         self.export_service_endpoint = os.environ.get("EXPORT_SERVICE_ENDPOINT", "http://localhost:10010")
         self.export_service_endpoint_ca_certificate = None
@@ -261,8 +286,14 @@ class Config:
         self.kessel_auth_oidc_issuer = os.getenv(
             "KESSEL_AUTH_OIDC_ISSUER", "https://sso.redhat.com/auth/realms/redhat-external"
         )
-        self.kessel_auth_enabled = os.environ.get("KESSEL_AUTH_ENABLED", "false").lower() == "true"
-        self.kessel_insecure = os.environ.get("KESSEL_INSECURE", "true").lower() == "true"
+        if self._kessel_v2_endpoint is not None:
+            self.kessel_auth_enabled = bool(self._kessel_v2_endpoint.authenticated)
+            self.kessel_insecure = urlsplit(self._kessel_v2_endpoint.uri).scheme != "https"
+            self.kessel_ca_certificate = self._kessel_v2_endpoint.ca_certificate
+        else:
+            self.kessel_auth_enabled = os.environ.get("KESSEL_AUTH_ENABLED", "false").lower() == "true"
+            self.kessel_insecure = os.environ.get("KESSEL_INSECURE", "true").lower() == "true"
+            self.kessel_ca_certificate = None
 
         self.bypass_unleash = os.environ.get("BYPASS_UNLEASH", "false").lower() == "true"
         self.unleash_refresh_interval = int(os.environ.get("UNLEASH_REFRESH_INTERVAL", "15"))
@@ -517,6 +548,9 @@ class Config:
 
             self.logger.info("Kessel Bypassed: %s", self.bypass_kessel)
             self.logger.info("Kessel is running in %s mode.", "INSECURE" if self.kessel_insecure else "SECURE")
+            self.logger.info("Kessel Endpoint Authenticated: %s", self.kessel_auth_enabled)
+            if self.kessel_ca_certificate:
+                self.logger.info("Kessel Endpoint CA Certificate: %s", self.kessel_ca_certificate)
             self.logger.info("V2 API Enabled: %s", self.v2_api_enabled)
 
             self.logger.info("Unleash (feature flags) Bypassed by config: %s", self.bypass_unleash)

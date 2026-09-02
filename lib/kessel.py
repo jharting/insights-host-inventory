@@ -49,14 +49,26 @@ def get_kessel_oauth2_credentials(config: Config) -> OAuth2ClientCredentials:
 
 class Kessel:
     def __init__(self, config: Config):
+        # A CA certificate is only ever present when the Clowder V2 dependency endpoint supplied
+        # one; V1/env-var-configured deployments pass None here and get the SDK's system-trust-store
+        # default (see ClientBuilder._build_credentials()).
+        channel_credentials = None
+        ca_certificate = getattr(config, "kessel_ca_certificate", None)
+        if ca_certificate:
+            with open(ca_certificate, "rb") as f:
+                channel_credentials = grpc.ssl_channel_credentials(root_certificates=f.read())
+
         client_builder = ClientBuilder(config.kessel_inventory_api_endpoint)
 
         if config.kessel_auth_enabled:
             auth_credentials = get_kessel_oauth2_credentials(config)
-            client_builder = client_builder.oauth2_client_authenticated(auth_credentials)
-
-        if config.kessel_insecure:
+            client_builder = client_builder.oauth2_client_authenticated(
+                auth_credentials, channel_credentials=channel_credentials
+            )
+        elif config.kessel_insecure:
             client_builder = client_builder.insecure()
+        else:
+            client_builder = client_builder.authenticated(channel_credentials=channel_credentials)
 
         self.inventory_svc, self.channel = client_builder.build()
         self.timeout = getattr(config, "kessel_timeout", 10.0)  # Default 10 second timeout

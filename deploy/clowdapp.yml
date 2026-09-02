@@ -3150,9 +3150,14 @@ parameters:
 - description: OIDC issuer URL used for Kessel auth token requests
   name: KESSEL_AUTH_OIDC_ISSUER
   value: https://sso.redhat.com/auth/realms/redhat-external
-- description: Port for the Kessel inventory gRPC API endpoint
+- description: >-
+    Overrides the Kessel inventory gRPC port even when a Clowder V2 dependency endpoint is
+    resolved. Blank by default so a correctly-configured ClowdAppRef (e.g. stage, pointing at the
+    HCC gateway on 443) is trusted as-is. Set explicitly (e.g. 9000) only for environments still
+    using kessel-inventory's real in-cluster ClowdApp, whose V2-reported port is wrong due to its
+    non-standard h2cTargetPort setup.
   name: KESSEL_INVENTORY_API_PORT
-  value: '9000'
+  value: ''
 - description: How long to wait for DB migrations to complete
   name: WAIT_FOR_MIGRATIONS_TIMEOUT_SECONDS
   value: '300'
